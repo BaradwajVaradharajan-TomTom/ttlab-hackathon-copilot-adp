@@ -1,2 +1,4 @@
-*/venv
-*/.venv
+.venv
+.idea
+
+*.genie_session.json
