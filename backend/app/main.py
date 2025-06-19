@@ -1,11 +1,12 @@
+import os
+from typing import Any, Dict, List
+
+import databricks.sql as dbsql
+from databricks.sql.client import Connection
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
-import os
-from dotenv import load_dotenv
-import databricks.sql as dbsql
-from databricks.sql.client import Connection
 
 load_dotenv()
 
@@ -19,20 +20,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class QueryRequest(BaseModel):
     query: str
+
 
 class DatabricksService:
     def __init__(self):
         self.connection = self._create_connection()
-    
+
     def _create_connection(self) -> Connection:
         return dbsql.connect(
             server_hostname=os.getenv("DATABRICKS_SERVER_HOSTNAME"),
             http_path=os.getenv("DATABRICKS_HTTP_PATH"),
-            access_token=os.getenv("DATABRICKS_TOKEN")
+            access_token=os.getenv("DATABRICKS_TOKEN"),
         )
-    
+
     def execute_query(self, query: str) -> List[Dict[str, Any]]:
         cursor = self.connection.cursor()
         try:
@@ -45,11 +48,14 @@ class DatabricksService:
         finally:
             cursor.close()
 
+
 db_service = DatabricksService()
+
 
 @app.get("/")
 async def root():
     return {"message": "Databricks Query API is running"}
+
 
 @app.post("/query")
 async def execute_query(request: QueryRequest):
