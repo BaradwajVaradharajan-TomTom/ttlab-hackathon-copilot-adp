@@ -1,0 +1,41 @@
+[tool.poetry]
+name = "Genie CLI"
+version = "0.1.0"
+description = "A python CLI around databricks Genie "
+authors = ["Konstantinos Mastorakis konstantinos.mastorakis@tomtom.com"]
+readme = "README.md"
+packages = [{ include = "genie" }, { include = "app" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0.0"
+fastapi = "^0.115.13"
+uvicorn = "^0.34.3"
+python-dotenv = "^1.1.0"
+databricks-sql-connector = "^4.0.4"
+pydantic = "^2.11.7"
+colorama = "^0.4.6"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+black = "^25.1.0"
+autoflake = "^2.3.1"
+mypy = "^1.15.0"
+ruff = "^0.11.11"
+pandas-stubs = "^2.2.3.250308"
+types-pyyaml = "^6.0.12.20250516"
+isort = "^6.0.1"
+types-colorama = "^0.4.15.20240311"
+types-requests = "^2.32.4.20250611"
+
+
+[tool.isort]
+# it allows to avoid conflicts with black
+profile = "black"
+## indicating to isort which package is our
+known_first_party = ["backend", "genie", "app"]
+
+[tool.poetry.scripts]
+genie = "genie.cli:main"
