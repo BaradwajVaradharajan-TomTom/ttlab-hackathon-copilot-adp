@@ -112,24 +112,24 @@ class GenieClient:
                         )
                     elif "query" in attachment.keys():
                         print(
-                            Fore.YELLOW
+                            Fore.GREEN
                             + f"\n\nQuery description: {Fore.RESET} \n{attachment['query']['description']}"
                         )
                         print(
-                            Fore.YELLOW
+                            Fore.GREEN
                             + f"\nSQL query: {Fore.RESET} \n{self.pretty_print_sql_(attachment['query']['query'])}"
                         )
                         print(
-                            Fore.YELLOW
+                            Fore.GREEN
                             + f"\nQuery metadata: {Fore.RESET} \n{attachment['query']['query_result_metadata']}"
                         )
             case "FAILED":
-                print(Fore.RED + "⚠️ Genie response failed!" + Fore.RESET)
+                print(Fore.RED + "\n⚠️ Genie response failed!" + Fore.RESET)
             case "CANCELLED":
-                print(Fore.RED + "⚠️ Genie conversation was cancelled!" + Fore.RESET)
+                print(Fore.RED + "\n⚠️ Genie conversation was cancelled!" + Fore.RESET)
             case _:
                 print(
-                    Fore.RED + "⚠️ Unexpected Genie response status:" + Fore.RESET,
+                    Fore.RED + "\n⚠️ Unexpected Genie response status:" + Fore.RESET,
                     message["status"],
                 )
 
