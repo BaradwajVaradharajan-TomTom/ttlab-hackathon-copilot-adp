@@ -25,7 +25,7 @@ class GenieClient:
         }
         self.space_id = space_id
 
-    def wait_for_completion(self, conversation_id, message_id) -> dict | None:
+    def wait_for_completion(self, conversation_id: str, message_id: str) -> dict | None:
         while True:
             message = self.get_message(conversation_id, message_id)
             status = message["status"]
@@ -74,7 +74,7 @@ class GenieClient:
         response.raise_for_status()  # Raise exception on HTTP errors
         return response.json()
 
-    def ask_follow_up(self, conversation_id, question: str) -> dict:
+    def ask_follow_up(self, conversation_id: str, question: str) -> dict:
         """
         Sends a message to a Databricks Genie conversation.
 
@@ -91,7 +91,7 @@ class GenieClient:
         response.raise_for_status()  # Raise error for bad responses
         return response.json()
 
-    def save_session(self, conversation_id):
+    def save_session(self, conversation_id: str):
         with open(self.SESSION_FILE_PATH, "w") as f:
             json.dump({"conversation_id": conversation_id}, f)
 
@@ -101,7 +101,7 @@ class GenieClient:
                 return json.load(f)
         return None
 
-    def print_response(self, message):
+    def print_response(self, message: dict):
         match message["status"]:
             case "COMPLETED":
                 for attachment in message["attachments"]:
@@ -134,7 +134,7 @@ class GenieClient:
                 )
 
     @staticmethod
-    def pretty_print_sql_(sql) -> str:
+    def pretty_print_sql_(sql: str) -> str:
         # List of common SQL keywords
         keywords = [
             "SELECT",

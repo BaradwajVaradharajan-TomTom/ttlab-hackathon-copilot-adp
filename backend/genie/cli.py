@@ -40,7 +40,7 @@ def main():
                 + Fore.RESET
             )
             sys.exit(1)
-        print(Fore.YELLOW + f"🟢 Starting conversation:{Fore.RESET}`{args.question}`" )
+        print(Fore.YELLOW + f"🟢 Starting conversation:{Fore.RESET}`{args.question}`")
         conv = client.start_conversation(args.question)
         conversation_id = conv["conversation_id"]
         message_id = conv["message_id"]
