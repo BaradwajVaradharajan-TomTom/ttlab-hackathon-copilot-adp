@@ -2,3 +2,4 @@
 .idea
 
 *.genie_session.json
+*poetry.lock
