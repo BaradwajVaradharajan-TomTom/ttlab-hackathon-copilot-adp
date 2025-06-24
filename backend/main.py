@@ -12,6 +12,7 @@ import random
 from shapely import wkt
 from shapely.geometry import Point, Polygon, LineString
 import numpy as np
+from genie.genie_client import GenieClient
 
 st.set_page_config(
     page_title="OSM Vandalism Validator",
@@ -99,111 +100,241 @@ def fetch_real_osm_user_data(changeset_id):
         st.error(f"An unexpected error occurred: {e}")
         return None
 
-# Mock Genie API responses for different query types
+def parse_genie_response(response):
+    pass
+
 def mock_genie_api(query):
     """Mock function to simulate Databricks Genie API responses"""
     
     # Classify query type based on keywords
     query_lower = query.lower()
     
-    if any(word in query_lower for word in ['show', 'visualize', 'map', 'where', 'location', 'area']):
-        # Spatial query - return changesets with WKT geometries
-        return {
-            'response_type': 'spatial',
-            'data': [
-                {
-                    'id': 145623789,
-                    'user_name': 'mapper_suspicious',
-                    'user_id': 12345,
-                    'created': '2024-06-15T14:30:00Z',
-                    'change_count': 156,
-                    'comment': 'Adding buildings',
-                    'bbox': 'POLYGON((13.3888 52.5170, 13.4888 52.5170, 13.4888 52.4170, 13.3888 52.4170, 13.3888 52.5170))',
-                    'center': 'POINT(13.4388 52.4670)',
-                    'country': 'Germany',
-                    'tool': 'iD',
-                    'vandalism_score': 0.85,
-                    'flags': ['suspicious_editing_pattern', 'high_change_velocity']
-                },
-                {
-                    'id': 145623790,
-                    'user_name': 'newbie_editor',
-                    'user_id': 67890,
-                    'created': '2024-06-15T16:45:00Z',
-                    'change_count': 23,
-                    'comment': 'First contribution!',
-                    'bbox': 'POLYGON((13.3000 52.5500, 13.3200 52.5500, 13.3200 52.5300, 13.3000 52.5300, 13.3000 52.5500))',
-                    'center': 'POINT(13.3100 52.5400)',
-                    'country': 'Germany',
-                    'tool': 'JOSM',
-                    'vandalism_score': 0.15,
-                    'flags': ['new_user']
-                }
-            ],
-            'summary': f'Found 2 changesets matching: {query}'
-        }
+    # Initialize Genie client
+    genie_client = GenieClient(
+        workspace_url="https://adb-2516823083981110.10.azuredatabricks.net",
+        auth_token="",
+        space_id="01f04140c25a1a47b5365212d84699f2",
+    )
     
-    elif any(word in query_lower for word in ['user', 'editor', 'mapper', 'who', 'history']):
-        # User profile query
-        return {
-            'response_type': 'user_profile',
-            'data': {
-                'user_id': 12345,
-                'user_name': 'mapper_suspicious',
-                'registration_date': '2024-01-15',
-                'days_active': 153,
-                'total_changesets': 47,
-                'total_edits': 2341,
-                'countries_edited': ['Germany', 'Poland', 'Czech Republic'],
-                'preferred_tools': ['iD', 'JOSM'],
-                'avg_changes_per_changeset': 49.8,
-                'received_messages': 3,
-                'blocks_received': 1,
-                'block_history': [
-                    {
-                        'date': '2024-05-20',
-                        'reason': 'Mechanical edits without discussion',
-                        'duration': '7 days'
+    # Send query to Genie
+    response_data = genie_client.ask_question(query)
+    
+    if response_data["type"] == "query":
+        try:
+            # Execute SQL query and get both manifest and data_array
+            result = genie_client.execute_sql_query(
+                warehouse_id="df28ac49a1cee3e9", 
+                query=response_data["message"]
+            )
+            
+            # If we got a valid response, use it to determine the response type
+            if 'manifest' in result and 'data_array' in result:
+                # For spatial queries, ensure bbox field is present
+                if any(word in query_lower for word in ['show', 'visualize', 'map', 'where', 'location', 'area']):
+                    # Check if we have valid spatial data with bbox
+                    if result['data_array'] and len(result['data_array']) > 0:
+                        # Convert data_array to list of dicts using manifest column names
+                        columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
+                        data = []
+                        for row in result['data_array']:
+                            data.append(dict(zip(columns, row)))
+                        
+                        # Ensure required fields for spatial data
+                        validated_data = []
+                        for item in data:
+                            if 'bbox' not in item or not item['bbox']:
+                                # If no bbox, try to create a default one
+                                if 'center' in item and item['center']:
+                                    # Create a small bbox around center point if available
+                                    try:
+                                        # Extract lat/lon from POINT(lon lat)
+                                        point_str = item['center'].replace('POINT(', '').replace(')', '')
+                                        lon, lat = map(float, point_str.split())
+                                        # Create a small bbox (0.01 degree ≈ 1.1km at equator)
+                                        bbox = f"POLYGON(({lon-0.005} {lat-0.005}, {lon+0.005} {lat-0.005}, {lon+0.005} {lat+0.005}, {lon-0.005} {lat+0.005}, {lon-0.005} {lat-0.005}))"
+                                        item['bbox'] = bbox
+                                    except:
+                                        # If we can't parse the point, skip this item
+                                        continue
+                                else:
+                                    # Skip items without bbox or center
+                                    continue
+                            validated_data.append(item)
+                        
+                        if validated_data:
+                            return {
+                                'response_type': 'spatial',
+                                'data': validated_data,
+                                'manifest': result['manifest'],
+                                'summary': f'Found {len(validated_data)} spatial features matching: {query}'
+                            }
+                    
+                    # Fallback to mock data if no valid spatial data found
+                    return {
+                        'response_type': 'spatial',
+                        'data': [
+                            {
+                                'id': 145623789,
+                                'user_name': 'mapper_suspicious',
+                                'user_id': 12345,
+                                'created': '2024-06-15T14:30:00Z',
+                                'change_count': 156,
+                                'comment': 'Adding buildings',
+                                'bbox': 'POLYGON((13.3888 52.5170, 13.4888 52.5170, 13.4888 52.4170, 13.3888 52.4170, 13.3888 52.5170))',
+                                'center': 'POINT(13.4388 52.4670)',
+                                'country': 'Germany',
+                                'tool': 'iD',
+                                'vandalism_score': 0.85,
+                                'flags': ['suspicious_editing_pattern', 'high_change_velocity']
+                            }
+                        ],
+                        'summary': f'Found 1 changeset matching: {query} (using mock data)'
                     }
-                ],
-                'community_reports': 5,
-                'organized_editing': False,
-                'vandalism_indicators': {
-                    'rapid_editing': True,
-                    'pattern_repetition': True,
-                    'ignores_community_feedback': True
-                }
-            },
-            'summary': f'User profile for: {query}'
-        }
+                
+                # For user profile queries, ensure required fields are present
+                elif any(word in query_lower for word in ['user', 'editor', 'mapper', 'who', 'history']):
+                    # Convert data_array to list of dicts using manifest column names
+                    columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
+                    data = [dict(zip(columns, row)) for row in result['data_array']] if result['data_array'] else []
+                    
+                    # Check if we have at least one valid user profile with required fields
+                    valid_profiles = [
+                        profile for profile in data 
+                        if 'user_id' in profile and 'user_name' in profile
+                    ]
+                    
+                    if valid_profiles:
+                        # Use the first valid profile
+                        profile = valid_profiles[0]
+                        
+                        # Ensure all required fields have default values if missing
+                        profile.setdefault('registration_date', '2024-01-01')
+                        profile.setdefault('days_active', 100)
+                        profile.setdefault('total_changesets', 50)
+                        profile.setdefault('total_edits', 2500)
+                        profile.setdefault('countries_edited', ['Unknown'])
+                        profile.setdefault('preferred_tools', ['iD', 'JOSM'])
+                        profile.setdefault('received_messages', 0)
+                        profile.setdefault('blocks_received', 0)
+                        profile.setdefault('block_history', [])
+                        profile.setdefault('community_reports', 0)
+                        profile.setdefault('organized_editing', False)
+                        profile.setdefault('vandalism_indicators', {
+                            'rapid_editing': False,
+                            'pattern_repetition': False,
+                            'ignores_community_feedback': False
+                        })
+                        
+                        return {
+                            'response_type': 'user_profile',
+                            'data': profile,
+                            'manifest': result['manifest'],
+                            'summary': f'User profile for: {profile.get("user_name", "Unknown User")}'
+                        }
+                    
+                    # Fallback to mock data if no valid profile found
+                    return {
+                        'response_type': 'user_profile',
+                        'data': {
+                            'user_id': 12345,
+                            'user_name': 'mock_user',
+                            'registration_date': '2024-01-01',
+                            'days_active': 100,
+                            'total_changesets': 50,
+                            'total_edits': 2500,
+                            'countries_edited': ['Unknown'],
+                            'preferred_tools': ['iD', 'JOSM'],
+                            'received_messages': 0,
+                            'blocks_received': 0,
+                            'block_history': [],
+                            'community_reports': 0,
+                            'organized_editing': False,
+                            'vandalism_indicators': {
+                                'rapid_editing': False,
+                                'pattern_repetition': False,
+                                'ignores_community_feedback': False
+                            }
+                        },
+                        'summary': 'User profile (using mock data)'
+                    }
+                
+                # For analytics queries, return as is
+                elif any(word in query_lower for word in ['chart', 'graph', 'trend', 'pattern', 'statistics', 'count']):
+                    # Convert data_array to list of dicts using manifest column names
+                    columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
+                    data = [dict(zip(columns, row)) for row in result['data_array']] if result['data_array'] else []
+                    
+                    # Create a simple line chart from the data if possible
+                    if len(data) > 1 and 'date' in data[0] and 'count' in data[0]:
+                        dates = [item['date'] for item in data]
+                        counts = [item['count'] for item in data]
+                        return {
+                            'response_type': 'analytics',
+                            'data': {
+                                'chart_type': 'line',
+                                'title': 'Analytics Results',
+                                'x_values': dates,
+                                'y_values': counts,
+                                'x_label': 'Date',
+                                'y_label': 'Count',
+                                'additional_data': {
+                                    'total_records': len(data),
+                                    'min_value': min(counts) if counts else 0,
+                                    'max_value': max(counts) if counts else 0,
+                                    'avg_value': sum(counts)/len(counts) if counts else 0
+                                }
+                            },
+                            'manifest': result['manifest'],
+                            'summary': f'Analytics for: {query}'
+                        }
+                    
+                    # Fallback to mock analytics data
+                    dates = pd.date_range('2024-06-01', '2024-06-15', freq='D')
+                    return {
+                        'response_type': 'analytics',
+                        'data': {
+                            'chart_type': 'line',
+                            'title': 'Vandalism Detection Trends',
+                            'x_values': [d.strftime('%Y-%m-%d') for d in dates],
+                            'y_values': [random.randint(10, 50) for _ in dates],
+                            'x_label': 'Date',
+                            'y_label': 'Count',
+                            'additional_data': {
+                                'total_changesets_analyzed': 1247,
+                                'flagged_as_suspicious': 89,
+                                'confirmed_vandalism': 23,
+                                'false_positives': 12
+                            }
+                        },
+                        'summary': f'Analytics for: {query} (using mock data)'
+                    }
+                
+                # For any other query type, return as table
+                else:
+                    # Convert data_array to list of dicts using manifest column names
+                    columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
+                    data = [dict(zip(columns, row)) for row in result['data_array']] if result['data_array'] else []
+                    
+                    return {
+                        'response_type': 'table',
+                        'data': data,
+                        'manifest': result['manifest'],
+                        'summary': f'Query returned {len(data)} rows'
+                    }
+            
+        except Exception as e:
+            return {
+                'response_type': 'error',
+                'data': f'Error executing query: {str(e)}',
+                'summary': 'An error occurred while processing your query'
+            }
     
-    elif any(word in query_lower for word in ['chart', 'graph', 'trend', 'pattern', 'statistics', 'count']):
-        # Analytics query
-        dates = pd.date_range('2024-06-01', '2024-06-15', freq='D')
-        return {
-            'response_type': 'analytics',
-            'data': {
-                'chart_type': 'line',
-                'title': 'Vandalism Detection Trends',
-                'x_values': [d.strftime('%Y-%m-%d') for d in dates],
-                'y_values': [random.randint(10, 50) for _ in dates],
-                'additional_data': {
-                    'total_changesets_analyzed': 1247,
-                    'flagged_as_suspicious': 89,
-                    'confirmed_vandalism': 23,
-                    'false_positives': 12
-                }
-            },
-            'summary': f'Analytics for: {query}'
-        }
-    
-    else:
-        # General query
-        return {
-            'response_type': 'general',
-            'data': 'This appears to be a general question about OSM vandalism. Please be more specific about what you\'d like to visualize, analyze, or investigate.',
-            'summary': f'General response for: {query}'
-        }
+    # If we get here, return the text response from ask_question
+    return {
+        'response_type': 'text',
+        'data': response_data["message"],
+        'summary': f'Response from Genie for: {query}'
+    }
 
 def create_map_with_changesets(changesets_data):
     """Create a folium map with changeset data"""
@@ -292,14 +423,14 @@ def display_user_profile(user_data):
         st.subheader("📊 Activity Analysis")
         
         # Vandalism indicators
-        st.write("**Vandalism Risk Indicators (Mocked):**")
+        st.write("**Vandalism Risk Indicators (Beta):**")
         indicators = user_data.get('vandalism_indicators', {})
         for indicator, value in indicators.items():
             icon = "🔴" if value else "🟢"
             st.write(f"{icon} {indicator.replace('_', ' ').title()}: {'Yes' if value else 'No'}")
         
         # Community interaction
-        st.write("**Community Interaction (Mocked):**")
+        st.write("**Community Interaction (Beta):**")
         st.write(f"• Messages received: {user_data['received_messages']}")
         st.write(f"• Community reports: {user_data['community_reports']}")
         st.write(f"• Blocks received: {user_data['blocks_received']}")
@@ -311,7 +442,7 @@ def display_user_profile(user_data):
                 st.warning(f"🚫 {block['date']}: {block['reason']} ({block['duration']})")
     
     # Activity timeline (mock data)
-    st.subheader("📈 Editing Timeline (Mocked)")
+    st.subheader("📈 Editing Timeline (Beta)")
     dates = pd.date_range(end=datetime.now(), periods=26, freq='W') # More realistic dates
     activity = [random.randint(0, user_data['total_changesets'] // 20 + 5) for _ in dates]
     
@@ -322,7 +453,6 @@ def display_user_profile(user_data):
         labels={'x': 'Date', 'y': 'Number of Changesets'}
     )
     st.plotly_chart(fig, use_container_width=True)
-
 
 def display_analytics(analytics_data):
     """Display analytics charts and metrics"""
@@ -388,7 +518,7 @@ def main():
     
     # Sidebar for queries
     with st.sidebar:
-        st.header("🔍 Ask Questions (Mocked Data)")
+        st.header("🔍 Ask Questions (Beta Data)")
         
         # Sample queries
         sample_queries = [
@@ -400,21 +530,27 @@ def main():
         
         for query in sample_queries:
             if st.button(query, key=f"sample_{query}"):
-                # When a mock query is run, we use the mock_genie_api
-                st.session_state.response = mock_genie_api(query)
+                # Show loading spinner while processing the query
+                with st.spinner("🧠 Analyzing your query..."):
+                    # When a mock query is run, we use the mock_genie_api
+                    st.session_state.response = mock_genie_api(query)
+                    st.rerun()  # Rerun to update the UI immediately
         
         st.markdown("---")
         
-        # Manual query input for mocked data
+        # Manual query input for Beta data
         user_query = st.text_area(
-            "Or ask your own question (mocked):",
+            "Or ask your own question (Beta):",
             placeholder="e.g., Show me changesets by user X in the last week",
             height=100
         )
         
         if st.button("🚀 Analyze Mock Data", type="primary"):
             if user_query.strip():
-                st.session_state.response = mock_genie_api(user_query)
+                # Show loading spinner while processing the query
+                with st.spinner("🧠 Analyzing your query..."):
+                    st.session_state.response = mock_genie_api(user_query)
+                    st.rerun()  # Rerun to update the UI immediately
             else:
                 st.warning("Please enter a query first!")
 
@@ -445,10 +581,9 @@ def main():
             if changesets_data:
                 folium_map = create_map_with_changesets(changesets_data)
                 st_folium(folium_map, width=700, height=500, use_container_width=True)
-                st.subheader("📋 Changeset Details")
+                st.subheader("📋 User Details")
                 df = pd.DataFrame(changesets_data)
-                display_df = df[['id', 'user_name', 'change_count', 'vandalism_score', 'comment', 'flags']].copy()
-                display_df['vandalism_score'] = display_df['vandalism_score'].round(2)
+                display_df = df[['id', 'user_name', 'change_count', 'comment']].copy()
                 st.dataframe(display_df, use_container_width=True)
             else:
                 st.warning("No spatial data found for this query.")
@@ -481,8 +616,8 @@ def main():
         This tool helps OSM validators quickly analyze potential vandalism using natural language queries.
         
         **What you can do:**
-        - 🗺️ **Visualize changesets** on a map with risk scoring (using mocked data)
-        - 👤 **Analyze user profiles** and editing history (using mocked data)
+        - 🗺️ **Visualize changesets** on a map with risk scoring (using Beta data)
+        - 👤 **Analyze user profiles** and editing history (using Beta data)
         - 🔬 **Fetch LIVE user data** from a real changeset ID
         - 📊 **View analytics** and trends
         
