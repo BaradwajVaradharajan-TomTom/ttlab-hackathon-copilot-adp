@@ -103,9 +103,16 @@ def fetch_real_osm_user_data(changeset_id):
 def parse_genie_response(response):
     pass
 
-def mock_genie_api(query):
-    """Mock function to simulate Databricks Genie API responses"""
+def mock_genie_api(query, conversation_id=None):
+    """Mock function to simulate Databricks Genie API responses with conversation support
     
+    Args:
+        query: The user's query
+        conversation_id: Optional conversation ID for follow-up questions
+        
+    Returns:
+        dict: Response with data and conversation context
+    """
     # Classify query type based on keywords
     query_lower = query.lower()
     
@@ -115,9 +122,9 @@ def mock_genie_api(query):
         auth_token="",
         space_id="01f04140c25a1a47b5365212d84699f2",
     )
-    
+        
     # Send query to Genie
-    response_data = genie_client.ask_question(query)
+    response_data, conversation_id = genie_client.ask_question(query, conversation_id)
     
     if response_data["type"] == "query":
         try:
@@ -166,8 +173,9 @@ def mock_genie_api(query):
                                 'response_type': 'spatial',
                                 'data': validated_data,
                                 'manifest': result['manifest'],
+                                'description': response_data['description'],
                                 'summary': f'Found {len(validated_data)} spatial features matching: {query}'
-                            }
+                            }, conversation_id
                     
                     # Fallback to mock data if no valid spatial data found
                     return {
@@ -188,8 +196,9 @@ def mock_genie_api(query):
                                 'flags': ['suspicious_editing_pattern', 'high_change_velocity']
                             }
                         ],
-                        'summary': f'Found 1 changeset matching: {query} (using mock data)'
-                    }
+                        'description': response_data['description'],
+                        'summary': f'Found 1 changeset matching: {query}'
+                    }, conversation_id
                 
                 # For user profile queries, ensure required fields are present
                 elif any(word in query_lower for word in ['user', 'editor', 'mapper', 'who', 'history']):
@@ -229,8 +238,9 @@ def mock_genie_api(query):
                             'response_type': 'user_profile',
                             'data': profile,
                             'manifest': result['manifest'],
+                            'description': response_data['description'],
                             'summary': f'User profile for: {profile.get("user_name", "Unknown User")}'
-                        }
+                        }, conversation_id
                     
                     # Fallback to mock data if no valid profile found
                     return {
@@ -255,8 +265,9 @@ def mock_genie_api(query):
                                 'ignores_community_feedback': False
                             }
                         },
-                        'summary': 'User profile (using mock data)'
-                    }
+                        'description': response_data['description'],
+                        'summary': 'User profile'
+                    }, conversation_id
                 
                 # For analytics queries, return as is
                 elif any(word in query_lower for word in ['chart', 'graph', 'trend', 'pattern', 'statistics', 'count']):
@@ -285,8 +296,9 @@ def mock_genie_api(query):
                                 }
                             },
                             'manifest': result['manifest'],
+                            'description': response_data['description'],
                             'summary': f'Analytics for: {query}'
-                        }
+                        }, conversation_id
                     
                     # Fallback to mock analytics data
                     dates = pd.date_range('2024-06-01', '2024-06-15', freq='D')
@@ -306,8 +318,9 @@ def mock_genie_api(query):
                                 'false_positives': 12
                             }
                         },
-                        'summary': f'Analytics for: {query} (using mock data)'
-                    }
+                        'description': response_data['description'],
+                        'summary': f'Analytics for: {query}'
+                    }, conversation_id
                 
                 # For any other query type, return as table
                 else:
@@ -319,22 +332,23 @@ def mock_genie_api(query):
                         'response_type': 'table',
                         'data': data,
                         'manifest': result['manifest'],
+                        'description': response_data['description'],
                         'summary': f'Query returned {len(data)} rows'
-                    }
+                    }, conversation_id
             
         except Exception as e:
             return {
                 'response_type': 'error',
                 'data': f'Error executing query: {str(e)}',
                 'summary': 'An error occurred while processing your query'
-            }
+            }, conversation_id
     
     # If we get here, return the text response from ask_question
     return {
         'response_type': 'text',
         'data': response_data["message"],
         'summary': f'Response from Genie for: {query}'
-    }
+    }, conversation_id
 
 def create_map_with_changesets(changesets_data):
     """Create a folium map with changeset data"""
@@ -491,7 +505,7 @@ def display_analytics(analytics_data):
         fig_pie = px.pie(
             values=counts,
             names=vandalism_types,
-            title="Vandalism Types Distribution"
+            title="Vandalism Types Distribution (partial data)"
         )
         st.plotly_chart(fig_pie, use_container_width=True)
     
@@ -503,9 +517,24 @@ def display_analytics(analytics_data):
         fig_bar = px.bar(
             x=tools,
             y=tool_counts,
-            title="Tools Used in Flagged Edits"
+            title="Tools Used in Flagged Edits (partial data)"
         )
         st.plotly_chart(fig_bar, use_container_width=True)
+
+def display_chat_message(role, content):
+    """Display a chat message with appropriate styling"""
+    if role == "user":
+        st.markdown(f"""
+        <div style='background-color: #2d3748; padding: 10px; border-radius: 8px; margin: 8px 0; border-left: 4px solid #4299e1;'>
+            <strong style='color: #e2e8f0;'>You:</strong> <span style='color: #e2e8f0;'>{content}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style='background-color: #2d3748; padding: 10px; border-radius: 8px; margin: 8px 0; border-left: 4px solid #48bb78;'>
+            <strong style='color: #e2e8f0;'>Assistant:</strong> <span style='color: #e2e8f0;'>{content}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
 # Main Streamlit App
 def main():
@@ -513,12 +542,79 @@ def main():
     st.markdown("*Natural language interface for OpenStreetMap vandalism detection and validation*")
     
     # Initialize session state
-    if 'response' not in st.session_state:
-        st.session_state.response = None
+    if 'conversation_history' not in st.session_state:
+        st.session_state.conversation_history = []
+    if 'current_conversation_id' not in st.session_state:
+        st.session_state.current_conversation_id = None
+    if 'query_response' not in st.session_state:
+        st.session_state.query_response = None
     
-    # Sidebar for queries
+    # Sidebar for chat history and actions
     with st.sidebar:
-        st.header("🔍 Ask Questions (Beta Data)")
+        # Chat history section
+        st.header("💬 Chat History")
+        
+        # Chat history container with custom styling and fixed height
+        chat_container = st.container(height=400)  # Fixed height with scroll
+        with chat_container:
+            if st.session_state.conversation_history:
+                for role, content in st.session_state.conversation_history:
+                    display_chat_message(role, content)
+            else:
+                st.info("💡 Start a new chat by asking a question or using the sample queries below")
+        
+        # New chat button
+        if st.button("🔄 New Chat", use_container_width=True, key="new_chat_sidebar"):
+            st.session_state.conversation_history = []
+            st.session_state.current_conversation_id = None
+            st.session_state.query_response = None
+            st.rerun()
+            
+        st.markdown("---")
+        
+        # Query input section
+        st.header("💬 Ask a Question")
+        with st.form("query_form"):
+            query = st.text_area(
+                "Your question:",
+                "",
+                key="query_input",
+                placeholder="Ask me anything about OSM data...",
+                label_visibility="collapsed",
+                height=100
+            )
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                submitted = st.form_submit_button("Send", use_container_width=True)
+            with col2:
+                if st.form_submit_button("Clear", type="secondary", use_container_width=True):
+                    query = ""
+                    st.rerun()
+            
+            if submitted and query.strip():
+                with st.spinner("🧠 Analyzing your question..."):
+                    # Add user query to history immediately
+                    st.session_state.conversation_history.append(("user", query))
+                    
+                    # Get response from Genie
+                    response, conversation_id = mock_genie_api(query, st.session_state.current_conversation_id)
+                    
+                    # Update conversation state
+                    st.session_state.query_response = response
+                    st.session_state.current_conversation_id = conversation_id
+                    
+                    # Add assistant response to history
+                    response_text = response.get('description', 'No response')
+                    st.session_state.conversation_history.append(("assistant", response_text))
+                    
+                    # Rerun to update the display
+                    st.rerun()
+        
+        st.markdown("---")
+        
+        # Quick actions section
+        st.header("🔍 Quick Actions")
         
         # Sample queries
         sample_queries = [
@@ -529,45 +625,82 @@ def main():
         ]
         
         for query in sample_queries:
-            if st.button(query, key=f"sample_{query}"):
-                # Show loading spinner while processing the query
+            if st.button(query, key=f"sample_{query}", use_container_width=True):
                 with st.spinner("🧠 Analyzing your query..."):
-                    # When a mock query is run, we use the mock_genie_api
-                    st.session_state.response = mock_genie_api(query)
-                    st.rerun()  # Rerun to update the UI immediately
+                    response, conversation_id = mock_genie_api(query, st.session_state.current_conversation_id)
+                    st.session_state.query_response = response
+                    st.session_state.current_conversation_id = conversation_id
+                    st.session_state.conversation_history.append(("user", query))
+                    st.session_state.conversation_history.append(("assistant", response.get('description', 'No response')))
+                    st.rerun()
         
         st.markdown("---")
         
-        # Manual query input for Beta data
-        user_query = st.text_area(
-            "Or ask your own question (Beta):",
-            placeholder="e.g., Show me changesets by user X in the last week",
-            height=100
-        )
+        # Manual changeset lookup
+        st.header("🔬 Lookup Changeset")
+        changeset_id_input = st.text_input("Enter OSM Changeset ID:", placeholder="e.g., 152735738")
         
-        if st.button("🚀 Analyze Mock Data", type="primary"):
-            if user_query.strip():
-                # Show loading spinner while processing the query
-                with st.spinner("🧠 Analyzing your query..."):
-                    st.session_state.response = mock_genie_api(user_query)
-                    st.rerun()  # Rerun to update the UI immediately
-            else:
-                st.warning("Please enter a query first!")
-
-        st.markdown("---")
-        st.header("🔬 Analyze Real Changeset")
-        changeset_id_input = st.text_input("Enter a real OSM Changeset ID:", placeholder="e.g., 152735738")
-
-        if st.button("Fetch Live User Data"):
+        if st.button("Fetch Live Changeset Data", use_container_width=True):
             if changeset_id_input.strip():
                 with st.spinner(f"Fetching data for changeset {changeset_id_input}..."):
-                    st.session_state.response = fetch_real_osm_user_data(changeset_id_input)
+                    response = fetch_real_osm_user_data(changeset_id_input)
+                    st.session_state.query_response = response
+                    st.session_state.conversation_history.append(("user", f"Show me changeset {changeset_id_input}"))
+                    st.session_state.conversation_history.append(("assistant", f"Here's the data for changeset {changeset_id_input}"))
+                    st.session_state.current_conversation_id = str(uuid.uuid4())
+                    st.rerun()
             else:
                 st.warning("Please enter a changeset ID!")
+    
+    # Main content area - now only for displaying responses
+    if st.session_state.query_response:
+        response = st.session_state.query_response
+        
+        # Display appropriate visualization based on response type
+        if response.get('type') == 'spatial' and response.get('data'):
+            display_spatial_data(response['data'])
+        elif response.get('type') == 'user_profile' and response.get('data'):
+            display_user_profile(response['data'])
+        elif response.get('type') == 'analytics' and response.get('data'):
+            display_analytics(response['data'])
+        elif response.get('type') == 'query' and response.get('data'):
+            # Display query results in a table
+            data = response['data']
+            if data and 'data_array' in data and data['data_array']:
+                df = pd.DataFrame(data['data_array'])
+                if not df.empty:
+                    st.dataframe(df, use_container_width=True)
+        
+        # Show error message if there was an error
+        if response.get('status') == 'error':
+            st.error(response.get('response', 'An unknown error occurred'))
+    
+    # Display the current query response if available
+    if st.session_state.query_response:
+        response = st.session_state.query_response
+        
+        # Display appropriate visualization based on response type
+        if response.get('type') == 'spatial' and response.get('data'):
+            display_spatial_data(response['data'])
+        elif response.get('type') == 'user_profile' and response.get('data'):
+            display_user_profile(response['data'])
+        elif response.get('type') == 'analytics' and response.get('data'):
+            display_analytics(response['data'])
+        elif response.get('type') == 'query' and response.get('data'):
+            # Display query results in a table
+            data = response['data']
+            if data and 'data_array' in data and data['data_array']:
+                df = pd.DataFrame(data['data_array'])
+                if not df.empty:
+                    st.dataframe(df, use_container_width=True)
+        
+        # Show error message if there was an error
+        if response.get('status') == 'error':
+            st.error(response.get('response', 'An unknown error occurred'))
 
     # Main content area
-    if st.session_state.response:
-        response = st.session_state.response
+    if st.session_state.query_response:
+        response = st.session_state.query_response
         
         # Display summary
         st.info(response['summary'])

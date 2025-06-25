@@ -34,7 +34,7 @@ class GenieClient:
                     if "text" in attachment.keys():
                         return {"type":"text", "message": attachment['text']['content']}
                     elif "query" in attachment.keys():
-                        return {"type":"query", "message": attachment['query']['query']}
+                        return {"type":"query", "message": attachment['query']['query'], "description": attachment['query']['description']}
                     else:
                         print("unknown entity in the message[status]")
                                 
@@ -50,7 +50,7 @@ class GenieClient:
  
 
 
-    def ask_question(self, question: str, conversation_id: Optional[str] = None) -> dict:
+    def ask_question(self, question: str, conversation_id: Optional[str] = None) -> tuple[dict, str]:
         """
         Sends a message to a Databricks Genie conversation.
 
@@ -59,18 +59,20 @@ class GenieClient:
         - question (str): The message/question to send to Genie
 
         Returns:
-        - dict: JSON response from the Genie API
+        - tuple: (response_dict, conversation_id) where:
+            - response_dict: JSON response from the Genie API
+            - conversation_id: The conversation ID used for this request
         """
         if not conversation_id:
             conversation = self.start_conversation(question)
             conversation_id = conversation["conversation_id"]
             message_id = conversation["message_id"]
             completed_message = self.wait_for_completion(conversation_id, message_id)
-            return self.get_message_result(completed_message)
+            return self.get_message_result(completed_message), conversation_id
         else:
             message_id = self.ask_follow_up(conversation_id, question)["message_id"]
             completed_message = self.wait_for_completion(conversation_id, message_id)
-            return self.get_message_result(completed_message)
+            return self.get_message_result(completed_message), conversation_id
 
     def execute_sql_query(self, warehouse_id: str, query: str, timeout_seconds: int = 50) -> dict:
         """
