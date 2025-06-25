@@ -7,7 +7,11 @@
 ### To run the application
 
 ```bash
-cd server
+cd app
+python -m venv .venv
+source .venv/bin/activate
+poetry install
+pip install -r requirements.txt
 streamlit run main.py
 ```
 
