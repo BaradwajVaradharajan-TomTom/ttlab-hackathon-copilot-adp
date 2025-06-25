@@ -103,7 +103,7 @@ def fetch_real_osm_user_data(changeset_id):
 def parse_genie_response(response):
     pass
 
-def mock_genie_api(query, conversation_id=None):
+def call_genie_api(query, conversation_id=None):
     """Mock function to simulate Databricks Genie API responses with conversation support
     
     Args:
@@ -138,7 +138,7 @@ def mock_genie_api(query, conversation_id=None):
             if 'manifest' in result and 'data_array' in result:
 
                 if any(word in query_lower for word in ['show', 'visualize', 'map', 'where', 'location', 'area']):
-
+                    
                     if result['data_array'] and len(result['data_array']) > 0:
 
                         columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
@@ -146,7 +146,6 @@ def mock_genie_api(query, conversation_id=None):
                         for row in result['data_array']:
                             data.append(dict(zip(columns, row)))
                         
-
                         validated_data = []
                         for item in data:
                             if 'bbox' not in item or not item['bbox']:
@@ -176,6 +175,14 @@ def mock_genie_api(query, conversation_id=None):
                                 'description': response_data['description'],
                                 'summary': f'Found {len(validated_data)} spatial features matching: {query}'
                             }, conversation_id
+                        else:
+                            return {
+                                'response_type': 'table',
+                                'data': data,
+                                'manifest': result['manifest'],
+                                'description': response_data['description'],
+                                'summary': f'Found {len(data)} spatial features matching: {query}'
+                            }, conversation_id
                     
 
                     return {
@@ -201,7 +208,7 @@ def mock_genie_api(query, conversation_id=None):
                     }, conversation_id
                 
 
-                elif any(word in query_lower for word in ['user', 'editor', 'mapper', 'who', 'history']):
+                elif any(word in query_lower for word in ['editor', 'mapper', 'who', 'history']):
                     # Convert data_array to list of dicts using manifest column names
                     columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
                     data = [dict(zip(columns, row)) for row in result['data_array']] if result['data_array'] else []
@@ -275,7 +282,6 @@ def mock_genie_api(query, conversation_id=None):
                     columns = [col['name'] for col in result['manifest'].get('schema', {}).get('columns', [])]
                     data = [dict(zip(columns, row)) for row in result['data_array']] if result['data_array'] else []
                     
-
                     if len(data) > 1 and 'date' in data[0] and 'count' in data[0]:
                         dates = [item['date'] for item in data]
                         counts = [item['count'] for item in data]
@@ -322,6 +328,13 @@ def mock_genie_api(query, conversation_id=None):
                         'summary': f'Analytics for: {query}'
                     }, conversation_id
                 
+                elif (word in query_lower for word in ['how many']):
+                    # Treat this as a text response and show the answer in the chat box only
+                    return {
+                        'response_type': 'text',
+                        'description': result['data_array'][0][0],
+                        'summary': f'Response from Genie for: {query}'
+                    }, conversation_id
 
                 else:
                     # Convert data_array to list of dicts using manifest column names
@@ -353,12 +366,23 @@ def mock_genie_api(query, conversation_id=None):
 def create_map_with_changesets(changesets_data):
     """Create a folium map with changeset data"""
     
-
+    
     if changesets_data:
-        first_center = wkt.loads(changesets_data[0]['center'])
-        center_lat, center_lon = first_center.y, first_center.x
+        if 'center' in changesets_data[0]:
+            # If center exists, use it
+            first_center = wkt.loads(changesets_data[0]['center'])
+            center_lat, center_lon = first_center.y, first_center.x
+        elif 'bbox' in changesets_data[0]:
+            # If only bbox exists, use its centroid
+            bbox = wkt.loads(changesets_data[0]['bbox'])
+            center = bbox.centroid
+            center_lat, center_lon = center.y, center.x
+        else:
+            # Default to Berlin if no valid geometry is found
+            center_lat, center_lon = 52.5200, 13.4050
     else:
-        center_lat, center_lon = 52.5200, 13.4050 # Berlin default
+        # Default to Berlin if no data
+        center_lat, center_lon = 52.5200, 13.4050
     
 
     m = folium.Map(
@@ -396,11 +420,11 @@ def create_map_with_changesets(changesets_data):
                     fillOpacity=0.3,
                     weight=2,
                     popup=f"""
-                    <b>Changeset {changeset['id']}</b><br>
-                    User: {changeset['user_name']}<br>
-                    Changes: {changeset['change_count']}<br>
+                    <b>Changeset {changeset.get('id', 'Unknown')}</b><br>
+                    User: {changeset.get('user_name', 'Unknown')}<br>
+                    Changes: {changeset.get('change_count', 'Unknown')}<br>
                     Score: {vandalism_score:.2f}<br>
-                    Comment: {changeset['comment']}<br>
+                    Comment: {changeset.get('comment', 'Unknown')}<br>
                     Flags: {', '.join(changeset.get('flags', []))}
                     """
                 ).add_to(m)
@@ -594,7 +618,7 @@ def main():
                 with st.spinner("🧠 Analyzing your question..."):
                     st.session_state.conversation_history.append(("user", query))
                     
-                    response, conversation_id = mock_genie_api(query, st.session_state.current_conversation_id)
+                    response, conversation_id = call_genie_api(query, st.session_state.current_conversation_id)
                     
                     st.session_state.query_response = response
                     st.session_state.current_conversation_id = conversation_id
@@ -618,7 +642,7 @@ def main():
         for query in sample_queries:
             if st.button(query, key=f"sample_{query}", use_container_width=True):
                 with st.spinner("🧠 Analyzing your query..."):
-                    response, conversation_id = mock_genie_api(query, st.session_state.current_conversation_id)
+                    response, conversation_id = call_genie_api(query, st.session_state.current_conversation_id)
                     st.session_state.query_response = response
                     st.session_state.current_conversation_id = conversation_id
                     st.session_state.conversation_history.append(("user", query))
@@ -641,47 +665,7 @@ def main():
                     st.rerun()
             else:
                 st.warning("Please enter a changeset ID!")
-    
-    if st.session_state.query_response:
-        response = st.session_state.query_response
-        
-        if response.get('type') == 'spatial' and response.get('data'):
-            display_spatial_data(response['data'])
-        elif response.get('type') == 'user_profile' and response.get('data'):
-            display_user_profile(response['data'])
-        elif response.get('type') == 'analytics' and response.get('data'):
-            display_analytics(response['data'])
-        elif response.get('type') == 'query' and response.get('data'):
-            # Display query results in a table
-            data = response['data']
-            if data and 'data_array' in data and data['data_array']:
-                df = pd.DataFrame(data['data_array'])
-                if not df.empty:
-                    st.dataframe(df, use_container_width=True)
-        
-        if response.get('status') == 'error':
-            st.error(response.get('response', 'An unknown error occurred'))
-    
-    if st.session_state.query_response:
-        response = st.session_state.query_response
-        
-        if response.get('type') == 'spatial' and response.get('data'):
-            display_spatial_data(response['data'])
-        elif response.get('type') == 'user_profile' and response.get('data'):
-            display_user_profile(response['data'])
-        elif response.get('type') == 'analytics' and response.get('data'):
-            display_analytics(response['data'])
-        elif response.get('type') == 'query' and response.get('data'):
-            # Display query results in a table
-            data = response['data']
-            if data and 'data_array' in data and data['data_array']:
-                df = pd.DataFrame(data['data_array'])
-                if not df.empty:
-                    st.dataframe(df, use_container_width=True)
-        
-        if response.get('status') == 'error':
-            st.error(response.get('response', 'An unknown error occurred'))
-
+ 
     if st.session_state.query_response:
         response = st.session_state.query_response
         
@@ -709,7 +693,9 @@ def main():
         elif response_type == 'analytics':
             st.subheader("📊 Analytics Dashboard")
             display_analytics(response['data'])
-        
+        elif response_type == 'table':
+            st.subheader("📋 Table Results")
+            st.dataframe(response['data'], use_container_width=True)
         elif response_type == 'general':
             st.subheader("💬 General Response")
             st.write(response['data'])
